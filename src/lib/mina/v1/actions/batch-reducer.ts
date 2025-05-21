@@ -389,6 +389,8 @@ class BatchReducer<
       this.actionType
     );
 
+    // console.log('witness length', witnesses.length);
+
     // if there are no pending actions, there is no need to call the reducer
     if (witnesses.length === 0) return [];
 
@@ -401,6 +403,25 @@ class BatchReducer<
 
     // create the stack from full actions
     let stack = MerkleActions(actionType).fromReverse(actions.toArrayUnconstrained().get());
+
+    console.log(
+      'stack',
+      stack
+        .toArrayUnconstrained()
+        .get()
+        .map((a) =>
+          a
+            .toArrayUnconstrained()
+            .get()
+            .map((a) => {
+              let { hash, value } = a;
+              return {
+                hash: hash.toString(),
+                value: value.get(),
+              };
+            })
+        )
+    );
 
     let batches: ActionBatch<Action>[] = [];
     let baseHint = {
@@ -430,11 +451,14 @@ class BatchReducer<
       // pop off actions as long as we can fit them in a batch
       let currentBatchSize = 0;
       while (i >= 0) {
+        // console.log('current batch size', currentBatchSize);
         currentBatchSize += stackArray[i].lengthUnconstrained().get();
         if (currentBatchSize > batchSize) break;
         let actionList = stack.pop();
         processedActionState = Actions.updateSequenceState(processedActionState, actionList.hash);
+        // console.log('processedActionState', processedActionState.toString());
         i--;
+        // console.log('i', i);
       }
       onchainStack = stack.hash;
       useOnchainStack = Bool(true);
@@ -442,6 +466,44 @@ class BatchReducer<
 
     // sanity check: we should have put all actions in batches
     stack.isEmpty().assertTrue();
+
+    console.log(
+      'batches',
+      JSON.stringify(
+        batches.map((b) => {
+          let {
+            isRecursive,
+            onchainActionState,
+            onchainStack,
+            processedActionState,
+            stack,
+            useOnchainStack,
+            witnesses,
+          } = b;
+
+          return {
+            isRecursive: isRecursive.toBoolean(),
+            onchainActionState: onchainActionState.toString(),
+            onchainStack: onchainStack.toString(),
+            processedActionState: processedActionState.toString(),
+            stack: stack
+              .toArrayUnconstrained()
+              .get()
+              .map((a) => a.hash.toString()),
+            useOnchainStack: useOnchainStack.toBoolean(),
+            witnesses: witnesses.get().map((w) => {
+              if (!w) return null;
+              return {
+                hash: w.hash.toString(),
+                stateBefore: w.stateBefore.toString(),
+              };
+            }),
+          };
+        }),
+        null,
+        2
+      )
+    );
 
     return batches.map((batch) => ({ proof, batch }));
   }
@@ -522,10 +584,41 @@ async function fetchActionWitnesses<T>(
   );
   if ('error' in result) throw Error(JSON.stringify(result));
 
+  console.log('empty action state', emptyActionState.toString());
+
+  console.log('Fetched result', JSON.stringify(result, null, 2));
+
   let actionFields = result.map(({ actions }) =>
     actions.map((action) => action.map(BigInt)).reverse()
   );
+
+  // console.log('Fetched action fields', actionFields);
+
   let actions = MerkleActions.fromFields(actionType, actionFields, fromActionState);
+
+  // console.log('merkle actions', actions, actions.toArrayUnconstrained().get());
+  // console.log(
+  //   actions
+  //     .toArrayUnconstrained()
+  //     .get()
+  //     .map((a) => a.data.get())
+  // );
+
+  console.log(
+    actions
+      .toArrayUnconstrained()
+      .get()
+      .map((a) => {
+        const { previousHash, element } = a.data.get()[0];
+        return {
+          previousHash: previousHash.toString(),
+          element: {
+            hash: element.hash.toString(),
+            value: element.value.get(),
+          },
+        };
+      })
+  );
 
   let actionState = fromActionState;
   let witnesses: ActionWitnesses = [];
@@ -533,10 +626,19 @@ async function fetchActionWitnesses<T>(
   let hashes = actionFields.map((actions) =>
     actions.reduce(pushAction, ActionsBigint.empty().hash)
   );
+  console.log('Fetched actions hashes', hashes);
   for (let actionsHash of hashes) {
     witnesses.push({ hash: actionsHash, stateBefore: actionState });
     actionState = ActionsBigint.updateSequenceState(actionState, actionsHash);
   }
+  console.log('Fetched action state', actionState.toString());
+  console.log(
+    'Fetched witnesses',
+    witnesses.map((w) => {
+      if (w === undefined) return { hash: 'undefined', stateBefore: 'undefined' };
+      return { hash: w.hash.toString(), stateBefore: w.stateBefore.toString() };
+    })
+  );
   return { endActionState: actionState, witnesses, actions };
 }
 
